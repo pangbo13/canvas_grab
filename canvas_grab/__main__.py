@@ -9,10 +9,6 @@ from canvasapi.exceptions import ResourceDoesNotExist
 import sys
 
 
-class CanvasGrabCliError(Exception):
-    pass
-
-
 def request_reconfigure():
     if len(sys.argv) >= 2:
         if sys.argv[1] == 'configure':
@@ -45,7 +41,11 @@ def main():
                 f'It seems that you have upgraded canvas_grab. Please reconfigure. ({colored(e, "red")} not found)')
             require_reconfigure = True
     if not config_file.exists() or request_reconfigure() or require_reconfigure:
-        config.interact()
+        try:
+            config.interact()
+        except KeyboardInterrupt:
+            print("User canceled the configuration process")
+            return
         Path('config.toml').write_text(
             toml.dumps(config.to_config()), encoding='utf8')
 
@@ -75,16 +75,7 @@ def main():
             on_disk_path).take_snapshot()
 
         # take canvas snapshot
-        mode = config.organize_mode.mode
-        canvas_snapshot_module = canvas_grab.snapshot.CanvasModuleSnapshot(
-            course)
-        canvas_snapshot_file = canvas_grab.snapshot.CanvasFileSnapshot(course)
-        if mode == 'module':
-            canvas_snapshots = [canvas_snapshot_module, canvas_snapshot_file]
-        elif mode == 'file':
-            canvas_snapshots = [canvas_snapshot_file, canvas_snapshot_module]
-        else:
-            raise CanvasGrabCliError(f"Unsupported organize mode {mode}")
+        canvas_snapshots = config.organize_mode.get_snapshots(course)
         canvas_snapshot = {}
         for canvas_snapshot_obj in canvas_snapshots:
             try:
@@ -94,11 +85,11 @@ def main():
                     colored(f'{mode} not supported, falling back to alternative mode', 'yellow'))
                 continue
             break
-        canvas_snapshot = config.file_filter.filter_files(canvas_snapshot)
 
         # generate transfer plan
         planner = canvas_grab.planner.Planner(config.organize_mode.delete_file)
-        plans = planner.plan(canvas_snapshot, on_disk_snapshot)
+        plans = planner.plan(
+            canvas_snapshot, on_disk_snapshot, config.file_filter)
         print(colored(
             f'  Updating {len(plans)} files ({len(canvas_snapshot)} files on remote)'))
         # start download

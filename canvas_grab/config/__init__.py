@@ -1,5 +1,6 @@
 from canvas_grab.configurable import Configurable
 from canvasapi import Canvas
+from canvasapi.exceptions import InvalidAccessToken
 from termcolor import colored
 
 from .endpoint import Endpoint
@@ -26,19 +27,47 @@ class Config(Configurable):
             'file_filter': self.file_filter.to_config()
         }
 
+    def try_from_config(self, func):
+        try:
+            return func(), None
+        except KeyError as e:
+            return None, e
+
     def from_config(self, config):
-        self.download_folder = config.get(
-            'download_folder', self.download_folder)
-        self.endpoint.from_config(config['endpoint'])
-        self.organize_mode.from_config(config['organize_mode'])
-        self.course_filter.from_config(config['course_filter'])
-        self.file_filter.from_config(config['file_filter'])
+        final_err = None
+        self.download_folder, err = self.try_from_config(
+            lambda: config.get(
+                'download_folder', self.download_folder))
+        final_err = final_err or err
+        _, err = self.try_from_config(
+            lambda: self.endpoint.from_config(
+                config['endpoint'])
+        )
+        final_err = final_err or err
+        _, err = self.try_from_config(
+            lambda: self.organize_mode.from_config(config['organize_mode']))
+        final_err = final_err or err
+        _, err = self.try_from_config(
+            lambda: self.course_filter.from_config(config['course_filter']))
+        final_err = final_err or err
+        _, err = self.try_from_config(
+            lambda: self.file_filter.from_config(config['file_filter']))
+        final_err = final_err or err
+        if final_err:
+            raise final_err
 
     def interact(self):
-        self.endpoint.interact()
-        canvas = self.endpoint.login()
-        print(
-            f'You are logged in as {colored(canvas.get_current_user(), "cyan")}')
+        while True:
+            self.endpoint.interact()
+            canvas = self.endpoint.login()
+            try:
+                print(
+                    f'You are logged in as {colored(canvas.get_current_user(), "cyan")}')
+            except InvalidAccessToken:
+                print(f'Failed to login')
+                continue
+            break
+
         courses, not_enrolled = filter_available_courses(canvas.get_courses())
         print(
             f'There are {len(courses)} currently enrolled courses and {len(not_enrolled)} courses not available.')

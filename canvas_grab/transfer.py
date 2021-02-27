@@ -5,6 +5,7 @@ from termcolor import colored
 
 from .download_file import download_file as df
 from .utils import apply_datetime_attr, truncate_name
+from .snapshot import SnapshotLink, SnapshotFile
 
 TIMEOUT = 3
 ATTEMPT = 3
@@ -40,11 +41,17 @@ class Transfer(object):
                 except Exception as e:
                     pass
                 if plan.url == '':
-                    print("  " + colored(f'{key} not available yet', 'yellow'))
+                    print(f'  {colored("x (not available)", "yellow")} {key}')
                     continue
-                download_file(
-                    plan.url, f'({idx+1}/{len(plans)}) ' + truncate_name(plan.name), path, plan.size)
-                apply_datetime_attr(path, plan.created_at, plan.modified_at)
+                if isinstance(plan, SnapshotFile):
+                    download_file(
+                        plan.url, f'({idx+1}/{len(plans)}) ' + truncate_name(plan.name), path, plan.size)
+                    apply_datetime_attr(
+                        path, plan.created_at, plan.modified_at)
+                elif isinstance(plan, SnapshotLink):
+                    Path(path).write_text(plan.content(), encoding='utf-8')
+                else:
+                    print(colored('Unsupported snapshot type', 'red'))
 
             if op == 'delete':
                 try:
@@ -58,3 +65,5 @@ class Transfer(object):
                 print(f'  {colored("=", "green")} {key}')
             if op == 'delete':
                 print(f'  {colored("-", "yellow")} {key}')
+            if op == 'ignore':
+                print(f'  {colored("x (ignored)", "yellow")} {key}')
