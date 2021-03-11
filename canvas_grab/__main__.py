@@ -9,29 +9,69 @@ from canvasapi.exceptions import ResourceDoesNotExist
 import sys
 
 
-def request_reconfigure():
-    if len(sys.argv) >= 2:
-        if sys.argv[1] == 'configure':
-            return True
-    return False
+def get_options():
+    import argparse
 
+    def greeting():
+        # First, welcome our users
+        print("Thank you for using canvas_grab!")
+        print(
+            f'You are using version {canvas_grab.__version__}. If you have any questions, please file an issue at {colored("https://github.com/skyzh/canvas_grab/issues", "blue")}')
+        print(
+            f'You may review {colored("README.md", "green")} and {colored("LICENSE", "green")} shipped with this release')
+        print(
+            f'You may run this code with argument {colored(f"-h","cyan")} for command line usage')
+        print('--------------------')
 
-def main():
-    init()
+    # Argument Parser initiation
 
-    # First, welcome our users
-    print("Thank you for using canvas_grab!")
-    print(
-        f'You are using version {canvas_grab.__version__}. If you have any questions, please file an issue at {colored("https://github.com/skyzh/canvas_grab/issues", "blue")}')
-    print(
-        f'You may review {colored("README.md", "green")} and {colored("LICENSE", "green")} shipped with this release')
-    print('--------------------')
+    parser = argparse.ArgumentParser(
+        description='Grab all files on Canvas LMS to local directory.',
+        epilog="Configuration file variables specified with program arguments will override the "
+        "original settings at runtime, but will not be written to the original configuration file. "
+        "If you specify a configuration file with the --config-file argument when you configure it, "
+        "it will be overwritten with the new content.")
 
-    # Then, load config and start setup wizard
+    # Interactive
+    interactive_group = parser.add_mutually_exclusive_group()
+    interactive_group.add_argument("-i", "--interactive", dest="interactive", action="store_true",
+                                   default=True,
+                                   help="Set the program to run in interactive mode (default action)")
+    interactive_group.add_argument("-I", "--non-interactive", "--no-input", dest="interactive",
+                                   action="store_false", default=True,
+                                   help="Set the program to run in non-interactive mode. This can be "
+                                   "used to exit immediately in case of profile corruption without "
+                                   "getting stuck with the input.")
 
-    config_file = Path('config.toml')
+    # Reconfiguration
+    parser.add_argument("-r", "--reconfigure", "--configure", dest="reconfigure",
+                        help="Reconfigure the tool.", action="store_true")
+
+    # Location Specification
+    parser.add_argument("-o", "--download-folder", "--output",
+                        dest="download", help="Specify alternative download folder.")
+    parser.add_argument("-c", "--config-file", dest="config_file", default="config.toml",
+                        help="Specify alternative configuration file.")
+
+    # Generic Options
+    # TODO quiet mode
+    # parser.add_argument("-q", "--quiet", dest="quiet", help="Start the program in quiet mode. "
+    #                     "Only errors will be printed.", action="store_true")
+    parser.add_argument("--version", action="version",
+                        version=canvas_grab.__version__)
+    parser.add_argument("-k", "--keep-version", "--no-update", dest="noupdate", action="store_true",
+                        default=False, help="Skip update checking. This will be helpful without "
+                        "a stable network connection and prevent reconfiguration.")
+
+    args = parser.parse_args()
+
+    # TODO quiet mode
+    greeting()
+
+    print(f'Using config {args.config_file}')
+    config_file = Path(args.config_file)
     config = canvas_grab.config.Config()
-    require_reconfigure = False
+    config_fail = False
     if config_file.exists():
         try:
             config.from_config(toml.loads(
@@ -39,15 +79,33 @@ def main():
         except KeyError as e:
             print(
                 f'It seems that you have upgraded canvas_grab. Please reconfigure. ({colored(e, "red")} not found)')
-            require_reconfigure = True
-    if not config_file.exists() or request_reconfigure() or require_reconfigure:
+            config_fail = True
+    if config_fail or args.reconfigure or not config_file.exists():
+        if not args.interactive:
+            print(
+                "configuration file corrupted or not exist, and non interactive flag is set. Quit immediately.")
+            exit(-1)
         try:
             config.interact()
         except KeyboardInterrupt:
             print("User canceled the configuration process")
             return
-        Path('config.toml').write_text(
+        config_file.write_text(
             toml.dumps(config.to_config()), encoding='utf8')
+    if args.download:
+        config.download_folder = args.download
+
+    return args.interactive, args.noupdate, config
+
+
+def main():
+    init()
+    # Welcome users, and load configurations.
+    try:
+        interactive, noupdate, config = get_options()
+    except TypeError:
+        # User canceled the configuration process
+        return
 
     # Finally, log in and start synchronize
     canvas = config.endpoint.login()
@@ -56,11 +114,14 @@ def main():
     courses = list(canvas.get_courses())
     available_courses, not_available = canvas_grab.utils.filter_available_courses(
         courses)
-    print(
-        f'Found {len(courses)} courses in total ({len(not_available)} of which not available)')
     filtered_courses = config.course_filter.get_filter().filter_course(
         available_courses)
-    print(f'{len(available_courses) - len(filtered_courses)} courses ignored due to course filter configuration')
+
+    total_course_count = len(courses)
+    not_available_count = len(not_available)
+    filtered_count = len(available_courses) - len(filtered_courses)
+    print(colored(
+        f'{total_course_count} courses in total, {not_available_count} not available, {filtered_count} filtered', 'cyan'))
 
     course_name_parser = canvas_grab.course_parser.CourseParser()
     for idx, course in enumerate(filtered_courses):
@@ -91,12 +152,14 @@ def main():
         plans = planner.plan(
             canvas_snapshot, on_disk_snapshot, config.file_filter)
         print(colored(
-            f'  Updating {len(plans)} files ({len(canvas_snapshot)} files on remote)'))
+            f'  Updating {len(plans)} objects ({len(canvas_snapshot)} remote objects -> {len(on_disk_snapshot)} local objects)'))
         # start download
         transfer = canvas_grab.transfer.Transfer()
-        transfer.transfer(on_disk_path, plans)
+        transfer.transfer(
+            on_disk_path, f'{config.download_folder}/_canvas_grab_archive', plans)
 
-    canvas_grab.version.check_latest_version()
+    if not noupdate:
+        canvas_grab.version.check_latest_version()
 
 
 if __name__ == '__main__':
